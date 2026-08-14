@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- 头 -->
+  <circle cx="100" cy="100" r="88" fill="#0d99e8"/>
+  <!-- 白色脸 -->
+  <ellipse cx="100" cy="112" rx="60" ry="52" fill="#ffffff"/>
+  <!-- 眼睛 -->
+  <ellipse cx="72" cy="88" rx="13" ry="17" fill="#ffffff"/>
+  <ellipse cx="128" cy="88" rx="13" ry="17" fill="#ffffff"/>
+  <circle cx="74" cy="86" r="6" fill="#1a1a2e"/>
+  <circle cx="126" cy="86" r="6" fill="#1a1a2e"/>
+  <circle cx="77" cy="82" r="2.2" fill="#ffffff"/>
+  <circle cx="129" cy="82" r="2.2" fill="#ffffff"/>
+  <!-- 鼻子 -->
+  <circle cx="100" cy="97" r="9" fill="#e74c3c"/>
+  <circle cx="97" cy="94" r="3" fill="#ffffff" opacity="0.7"/>
+  <!-- 嘴 -->
+  <path d="M87 106 Q100 124 113 106 Z" fill="#ffffff"/>
+  <path d="M87 106 Q100 124 113 106" fill="none" stroke="#0d99e8" stroke-width="3" stroke-linecap="round"/>
+  <!-- 胡须 -->
+  <g stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round">
+    <line x1="28" y1="92" x2="60" y2="98"/>
+    <line x1="28" y1="104" x2="60" y2="104"/>
+    <line x1="28" y1="116" x2="60" y2="110"/>
+    <line x1="172" y1="92" x2="140" y2="98"/>
+    <line x1="172" y1="104" x2="140" y2="104"/>
+    <line x1="172" y1="116" x2="140" y2="110"/>
+  </g>
+  <!-- 红色项圈 + 铃铛 -->
+  <path d="M38 148 Q100 176 162 148" fill="none" stroke="#e74c3c" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="100" cy="168" r="10" fill="#f1c40f"/>
+  <circle cx="100" cy="171" r="3" fill="#c0392b" opacity="0.6"/>
+</svg>

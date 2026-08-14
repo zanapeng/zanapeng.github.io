@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 让页面在手机上也能正常显示 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>昝阿鹏的个人主页</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ====== 顶部导航 ====== -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <span class="logo">🪐 昝阿鹏的主页</span>
+      <div class="nav-links">
+        <a href="#about">关于我</a>
+        <a href="#projects">作品</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ====== 开头介绍区（把下面那句介绍换成你自己的） ====== -->
+  <header id="about" class="hero">
+    <div class="container">
+      <!-- 头像：想换照片的话，把 src 改成你的图片地址即可 -->
+      <img class="avatar" src="avatar.svg" alt="头像" />
+      <h1>你好，我是 <span class="highlight">昝阿鹏</span> 👋</h1>
+      <p class="subtitle">很高兴认识你，这里是昝阿鹏的个人主页。</p>
+    </div>
+  </header>
+
+  <!-- ====== 作品展示区（以后做好作品了，把卡片加到这里） ====== -->
+  <section id="projects" class="projects">
+    <div class="container">
+      <h2 class="section-title">我的作品</h2>
+      <div class="empty-tip">
+        <p>🚧 作品整理中，敬请期待</p>
+        <p class="empty-sub">以后做好作品，把卡片加到这里就行</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== 底部 ====== -->
+  <footer class="footer">
+    <div class="container">
+      <p class="copyright">© <span id="year"></span> 昝阿鹏 · 用 ❤️ 手写</p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -30,6 +30,7 @@
       <div class="dz-icon">📷</div>
       <p class="dz-title">点击选择，或把照片拖拽到这里</p>
       <p class="dz-hint">支持 JPG / PNG / WebP · 长边超过 2000px 会自动缩放以加快处理</p>
+      <button id="demoBtn" class="dz-demo">🧪 没有照片？用示例老照片试试</button>
       <input type="file" id="fileInput" accept="image/*" hidden />
     </div>
 
@@ -53,6 +54,11 @@
         </label>
 
         <div class="control">
+          <label>效果强度 <span id="intensityVal" class="val">100%</span></label>
+          <input type="range" id="intensity" min="0" max="200" step="5" value="100" />
+        </div>
+
+        <div class="control">
           <label>去黄 / 色温 <span id="temperatureVal" class="val">0</span></label>
           <input type="range" id="temperature" min="-100" max="100" value="0" />
         </div>
@@ -69,6 +75,10 @@
           <input type="range" id="saturation" min="-100" max="100" value="0" />
         </div>
         <div class="control">
+          <label>清晰度 <span id="clarityVal" class="val">0</span></label>
+          <input type="range" id="clarity" min="0" max="100" value="0" />
+        </div>
+        <div class="control">
           <label>去噪 <span id="denoiseVal" class="val">0</span></label>
           <input type="range" id="denoise" min="0" max="100" value="0" />
         </div>
@@ -78,13 +88,19 @@
         </div>
 
         <div class="btn-row">
+          <button id="presetBwBtn" class="btn ghost small">黑白</button>
+          <button id="presetVividBtn" class="btn ghost small">鲜艳</button>
+          <button id="presetRetroBtn" class="btn ghost small">复古</button>
+        </div>
+
+        <div class="btn-row">
           <button id="compareBtn" class="btn ghost">⇄ 前后对比</button>
           <button id="changeBtn" class="btn ghost">🖼 换一张</button>
         </div>
         <button id="holdBtn" class="btn ghost wide">👁 按住看原图</button>
         <button id="downloadBtn" class="btn primary wide">⬇ 下载修复结果（PNG）</button>
 
-        <p class="note">提示：点「前后对比」后，可拖动画布中间的分隔线查看差异；先用「自动修复」找感觉，再滑杆微调。</p>
+        <p class="note">提示：上传后已自动修复，点「前后对比」拖分隔线看差异；觉得不够猛就把「效果强度」拉高。预设：黑白 / 鲜艳 / 复古。</p>
       </aside>
     </div>
   </main>

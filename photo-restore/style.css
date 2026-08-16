@@ -210,6 +210,25 @@ body {
   flex: none;
 }
 
+.btn.small {
+  padding: 7px 0;
+  font-size: 12px;
+}
+
+.dz-demo {
+  margin-top: 16px;
+  background: none;
+  border: none;
+  color: var(--main-color);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dz-demo:hover {
+  color: #5749c9;
+}
+
 .control label {
   display: flex;
   justify-content: space-between;

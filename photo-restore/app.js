@@ -12,20 +12,23 @@
     origCanvas: null,   // 离屏画布：原图
     resultCanvas: null, // 离屏画布：处理结果
     medianCache: null,  // 去噪缓存（3x3 中值）
-    blurCache: null,    // 锐化缓存（3x3 高斯模糊）
+    blurCache: null,    // 锐化缓存（3x3 高斯）
+    blur5Cache: null,   // 清晰度缓存（5x5 高斯）
     levelsLUT: null,    // 自动色阶 LUT（3 x 256）
+    intensity: 100,     // 效果强度 %
     params: {
       temperature: 0,
       brightness: 0,
       contrast: 0,
       saturation: 0,
+      clarity: 0,
       denoise: 0,
       sharpen: 0,
       levels: 0
     },
     compareMode: false,
     showOriginal: false,
-    divX: 0.5,          // 对比分隔线位置（0..1）
+    divX: 0.5,
     dragging: false
   };
 
@@ -38,13 +41,15 @@
   var ctx = canvas.getContext("2d");
   var busyEl = $("busy");
 
-  var KEYS = ["temperature", "brightness", "contrast", "saturation", "denoise", "sharpen"];
+  var KEYS = ["temperature", "brightness", "contrast", "saturation", "clarity", "denoise", "sharpen"];
   var ctl = {};
   KEYS.forEach(function (k) {
     ctl[k] = $(k);
     ctl[k + "Val"] = $(k + "Val");
   });
   var levelsCtl = $("levelsCtl");
+  var intensityCtl = $("intensity");
+  var intensityVal = $("intensityVal");
   var compareBtn = $("compareBtn");
   var holdBtn = $("holdBtn");
 
@@ -53,7 +58,7 @@
 
   // ---------- 图像算子 ----------
 
-  // 3x3 中值滤波（逐通道插入排序，速度优先）
+  // 3x3 中值滤波（逐通道插入排序）
   function medianFilter(img) {
     var w = img.width, h = img.height, data = img.data;
     var out = new Uint8ClampedArray(data.length);
@@ -96,12 +101,11 @@
     return new ImageData(out, w, h);
   }
 
-  // 3x3 高斯模糊（用于 unsharp 锐化）
-  function gaussianBlur(img) {
+  // 3x3 高斯模糊（unsharp 锐化用）
+  function gaussianBlur3(img) {
     var w = img.width, h = img.height, data = img.data;
     var out = new Uint8ClampedArray(data.length);
     var K = [1, 2, 1, 2, 4, 2, 1, 2, 1];
-
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         var r = 0, g = 0, b = 0, ws = 0;
@@ -124,7 +128,48 @@
     return new ImageData(out, w, h);
   }
 
-  // 直方图百分位拉伸，生成每通道 LUT（0.5% ~ 99.5%）
+  // 5x5 高斯模糊（可分离实现，清晰度用）sigma≈1.6
+  function gaussianBlur5(img) {
+    var w = img.width, h = img.height, data = img.data;
+    var W = [1, 4, 7, 4, 1];
+    var WS = 17;
+    var tmp = new Float64Array(data.length);
+    var out = new Uint8ClampedArray(data.length);
+
+    // 水平
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var r = 0, g = 0, b = 0;
+        for (var dx = -2; dx <= 2; dx++) {
+          var nx = x + dx;
+          if (nx < 0 || nx >= w) nx = x;
+          var wt = W[dx + 2];
+          var j = (y * w + nx) * 4;
+          r += data[j] * wt; g += data[j + 1] * wt; b += data[j + 2] * wt;
+        }
+        var o = (y * w + x) * 4;
+        tmp[o] = r / WS; tmp[o + 1] = g / WS; tmp[o + 2] = b / WS;
+      }
+    }
+    // 垂直
+    for (var x2 = 0; x2 < w; x2++) {
+      for (var y2 = 0; y2 < h; y2++) {
+        var r2 = 0, g2 = 0, b2 = 0;
+        for (var dy = -2; dy <= 2; dy++) {
+          var ny2 = y2 + dy;
+          if (ny2 < 0 || ny2 >= h) ny2 = y2;
+          var wt2 = W[dy + 2];
+          var j2 = (ny2 * w + x2) * 4;
+          r2 += tmp[j2] * wt2; g2 += tmp[j2 + 1] * wt2; b2 += tmp[j2 + 2] * wt2;
+        }
+        var o2 = (y2 * w + x2) * 4;
+        out[o2] = r2 / WS; out[o2 + 1] = g2 / WS; out[o2 + 2] = b2 / WS; out[o2 + 3] = 255;
+      }
+    }
+    return new ImageData(out, w, h);
+  }
+
+  // 直方图百分位拉伸 LUT（0.5% ~ 99.5%）
   function computeLevelsLUT(img) {
     var w = img.width, h = img.height, data = img.data, n = w * h;
     var hist = [new Float64Array(256), new Float64Array(256), new Float64Array(256)];
@@ -153,12 +198,16 @@
     if (!state.medianCache) state.medianCache = medianFilter(state.original);
     return state.medianCache;
   }
-  function getBlur() {
-    if (!state.blurCache) state.blurCache = gaussianBlur(state.original);
+  function getBlur3() {
+    if (!state.blurCache) state.blurCache = gaussianBlur3(state.original);
     return state.blurCache;
   }
+  function getBlur5() {
+    if (!state.blur5Cache) state.blur5Cache = gaussianBlur5(state.original);
+    return state.blur5Cache;
+  }
 
-  // ---------- 渲染：结果画到离屏，再统一呈现 ----------
+  // ---------- 渲染 ----------
   function render() {
     if (!state.loaded) return;
     var w = state.width, h = state.height;
@@ -168,30 +217,30 @@
     var d = out.data;
 
     var p = state.params;
-    var t = p.temperature / 100;          // -1..1，>0 去黄（降红升蓝）
-    var bri = (p.brightness / 100) * 127;
-    var cf = (100 + p.contrast) / 100;    // 0..2
-    var sat = 1 + p.saturation / 100;     // 0..2
+    var k = state.intensity / 100;            // 效果强度
+    var t = (p.temperature / 100) * k;
+    var bri = (p.brightness / 100) * 127 * k;
+    var cf = 1 + (p.contrast / 100) * k;
+    var sat = 1 + (p.saturation / 100) * k;
+    var clA = (p.clarity / 100) * 1.4 * k;
     var hasMedian = p.denoise > 0;
     var median = hasMedian ? getMedian() : null;
-    var denA = p.denoise / 100;
+    var denA = (p.denoise / 100) * k;
     var hasBlur = p.sharpen > 0;
-    var blur = hasBlur ? getBlur() : null;
-    var shA = (p.sharpen / 100) * 1.6;
+    var blur = hasBlur ? getBlur3() : null;
+    var shA = (p.sharpen / 100) * 1.6 * k;
     var LUT = p.levels ? state.levelsLUT : null;
+    var blur5 = clA !== 0 ? getBlur5() : null;
 
     var n = w * h;
     for (var i = 0; i < n; i++) {
       var j = i * 4;
       var r = src[j], g = src[j + 1], b = src[j + 2];
 
-      // 0) 自动色阶（直方图拉伸）
+      // 0) 自动色阶
       if (LUT) { r = LUT[0][r]; g = LUT[1][g]; b = LUT[2][b]; }
       // 1) 去黄/色温
-      if (t !== 0) {
-        r += -t * 60;
-        b += t * 60;
-      }
+      if (t !== 0) { r += -t * 60; b += t * 60; }
       // 2) 亮度
       if (bri !== 0) { r += bri; g += bri; b += bri; }
       // 3) 对比度
@@ -207,13 +256,19 @@
         g = lum + (g - lum) * sat;
         b = lum + (b - lum) * sat;
       }
-      // 5) 去噪
+      // 5) 清晰度（局部对比度）
+      if (blur5) {
+        r = r + (r - blur5.data[j]) * clA;
+        g = g + (g - blur5.data[j + 1]) * clA;
+        b = b + (b - blur5.data[j + 2]) * clA;
+      }
+      // 6) 去噪
       if (hasMedian) {
         r = r + (median.data[j] - r) * denA;
         g = g + (median.data[j + 1] - g) * denA;
         b = b + (median.data[j + 2] - b) * denA;
       }
-      // 6) 锐化（unsharp mask）
+      // 7) 锐化（unsharp mask）
       if (hasBlur) {
         r = r + (r - blur.data[j]) * shA;
         g = g + (g - blur.data[j + 1]) * shA;
@@ -251,7 +306,6 @@
       ctx.drawImage(state.resultCanvas, 0, 0);
       ctx.restore();
 
-      // 分隔线 + 把手
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -266,7 +320,6 @@
       ctx.fill();
       ctx.stroke();
 
-      // 标签
       ctx.font = "bold 13px -apple-system, 'PingFang SC', sans-serif";
       ctx.textBaseline = "middle";
       ctx.fillStyle = "rgba(30,36,48,0.65)";
@@ -311,6 +364,8 @@
       ctl[k + "Val"].textContent = state.params[k];
     });
     levelsCtl.checked = state.params.levels === 1;
+    intensityCtl.value = state.intensity;
+    intensityVal.textContent = state.intensity + "%";
   }
 
   function resetParams() {
@@ -319,7 +374,47 @@
     syncControls();
   }
 
+  function setParams(obj) {
+    KEYS.forEach(function (k) { state.params[k] = obj[k] !== undefined ? obj[k] : 0; });
+    state.params.levels = obj.levels !== undefined ? obj.levels : 0;
+    syncControls();
+  }
+
   // ---------- 图片加载 ----------
+  function loadFromCanvas(srcCanvas) {
+    var w = srcCanvas.width, h = srcCanvas.height;
+
+    state.origCanvas = srcCanvas;
+    state.original = srcCanvas.getContext("2d").getImageData(0, 0, w, h);
+
+    state.resultCanvas = document.createElement("canvas");
+    state.resultCanvas.width = w;
+    state.resultCanvas.height = h;
+
+    canvas.width = w;
+    canvas.height = h;
+
+    state.width = w;
+    state.height = h;
+    state.medianCache = null;
+    state.blurCache = null;
+    state.blur5Cache = null;
+    state.levelsLUT = computeLevelsLUT(state.original);
+    state.compareMode = false;
+    state.showOriginal = false;
+    state.divX = 0.5;
+    state.loaded = true;
+
+    resetParams();
+    workspace.classList.remove("hidden");
+    dropzone.classList.add("hidden");
+    compareBtn.classList.remove("active");
+    workspace.classList.remove("comparing");
+
+    // 加载后自动跑一次修复，立刻看到效果
+    autoRestore();
+  }
+
   function loadImage(file) {
     if (!file || !/^image\//.test(file.type)) {
       alert("请选择图片文件。");
@@ -332,38 +427,12 @@
       var scale = Math.min(1, MAX_DIM / Math.max(w, h));
       w = Math.round(w * scale);
       h = Math.round(h * scale);
-
-      state.origCanvas = document.createElement("canvas");
-      state.origCanvas.width = w;
-      state.origCanvas.height = h;
-      var octx = state.origCanvas.getContext("2d");
-      octx.drawImage(img, 0, 0, w, h);
-      state.original = octx.getImageData(0, 0, w, h);
-
-      state.resultCanvas = document.createElement("canvas");
-      state.resultCanvas.width = w;
-      state.resultCanvas.height = h;
-
-      canvas.width = w;
-      canvas.height = h;
-
-      state.width = w;
-      state.height = h;
-      state.medianCache = null;
-      state.blurCache = null;
-      state.levelsLUT = computeLevelsLUT(state.original);
-      state.compareMode = false;
-      state.showOriginal = false;
-      state.divX = 0.5;
-      state.loaded = true;
+      var c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
       URL.revokeObjectURL(url);
-
-      resetParams();
-      workspace.classList.remove("hidden");
-      dropzone.classList.add("hidden");
-      compareBtn.classList.remove("active");
-      workspace.classList.remove("comparing");
-      render();
+      loadFromCanvas(c);
     };
     img.onerror = function () {
       URL.revokeObjectURL(url);
@@ -381,6 +450,129 @@
     dropzone.classList.remove("hidden");
   }
 
+  // ---------- 示例老照片（程序生成：泛黄 + 噪点 + 暗角 + 划痕） ----------
+  function generateDemo() {
+    var w = 800, h = 600;
+    var c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    var x = c.getContext("2d");
+
+    // 天空
+    var g = x.createLinearGradient(0, 0, 0, 420);
+    g.addColorStop(0, "#9db8d8");
+    g.addColorStop(1, "#efe6cf");
+    x.fillStyle = g;
+    x.fillRect(0, 0, w, 420);
+
+    // 太阳
+    x.fillStyle = "#f5ecc2";
+    x.beginPath();
+    x.arc(620, 130, 46, 0, Math.PI * 2);
+    x.fill();
+
+    // 云
+    x.fillStyle = "rgba(255,255,255,0.85)";
+    x.beginPath();
+    x.arc(150, 120, 26, 0, Math.PI * 2);
+    x.arc(190, 105, 32, 0, Math.PI * 2);
+    x.arc(230, 120, 24, 0, Math.PI * 2);
+    x.fill();
+
+    // 远山
+    x.fillStyle = "#96a7a0";
+    x.beginPath();
+    x.moveTo(0, 420);
+    x.lineTo(140, 300);
+    x.lineTo(300, 420);
+    x.closePath();
+    x.fill();
+    x.beginPath();
+    x.moveTo(220, 420);
+    x.lineTo(430, 280);
+    x.lineTo(640, 420);
+    x.closePath();
+    x.fill();
+
+    // 地面
+    x.fillStyle = "#c9b98a";
+    x.fillRect(0, 420, w, 180);
+
+    // 小路
+    x.fillStyle = "#b3a074";
+    x.beginPath();
+    x.moveTo(300, 600);
+    x.lineTo(360, 420);
+    x.lineTo(440, 420);
+    x.lineTo(500, 600);
+    x.closePath();
+    x.fill();
+
+    // 房子
+    x.fillStyle = "#d8c4a2";
+    x.fillRect(360, 430, 130, 90);
+    x.fillStyle = "#a0522d";
+    x.beginPath();
+    x.moveTo(345, 430);
+    x.lineTo(425, 385);
+    x.lineTo(505, 430);
+    x.closePath();
+    x.fill();
+    x.fillStyle = "#7a5230";
+    x.fillRect(410, 470, 30, 50);
+    x.fillStyle = "#8aa6c8";
+    x.fillRect(375, 450, 26, 26);
+    x.fillRect(450, 450, 26, 26);
+
+    // 树
+    x.fillStyle = "#8a6a48";
+    x.fillRect(240, 470, 18, 60);
+    x.fillStyle = "#6e8a5e";
+    x.beginPath();
+    x.arc(249, 440, 42, 0, Math.PI * 2);
+    x.fill();
+
+    // 旧化处理：降饱和 + 泛黄 + 噪点 + 暗角
+    var img = x.getImageData(0, 0, w, h);
+    var d = img.data;
+    var n = w * h;
+    for (var i = 0; i < n; i++) {
+      var j = i * 4;
+      var r = d[j], gg = d[j + 1], b = d[j + 2];
+      var lum = 0.299 * r + 0.587 * gg + 0.114 * b;
+      var sat = 0.55;
+      r = lum + (r - lum) * sat;
+      gg = lum + (gg - lum) * sat;
+      b = lum + (b - lum) * sat;
+      r = r * 1.08 + 14;
+      gg = gg * 1.02 + 6;
+      b = b * 0.72 + 4;
+      var no = (Math.random() - 0.5) * 34;
+      r += no; gg += no; b += no;
+      var px = (i % w - w / 2) / (w / 2);
+      var py = (((i / w) | 0) - h / 2) / (h / 2);
+      var vig = 1 - 0.5 * Math.min(1, px * px + py * py);
+      r *= vig; gg *= vig; b *= vig;
+      d[j] = clamp(r, 0, 255);
+      d[j + 1] = clamp(gg, 0, 255);
+      d[j + 2] = clamp(b, 0, 255);
+      d[j + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+
+    // 划痕
+    x.strokeStyle = "rgba(255,255,255,0.22)";
+    x.lineWidth = 1.2;
+    for (var k = 0; k < 9; k++) {
+      x.beginPath();
+      x.moveTo(Math.random() * w, Math.random() * h);
+      x.lineTo(Math.random() * w, Math.random() * h);
+      x.stroke();
+    }
+
+    loadFromCanvas(c);
+  }
+
   // ---------- 自动修复 ----------
   function autoRestore() {
     if (!state.loaded) return;
@@ -395,16 +587,16 @@
         sr += src[j]; sg += src[j + 1]; sb += src[j + 2];
       }
       var mr = sr / n, mg = sg / n, mb = sb / n;
-      // 旧照片偏黄：红绿高、蓝低 → 降红升蓝（t>0 = 去黄）
       var t = clamp(Math.round((mg - mb) / 1.5), -60, 60);
 
       state.params = {
         temperature: t,
-        brightness: 0,
-        contrast: 25,
-        saturation: 18,
-        denoise: 35,
-        sharpen: 50,
+        brightness: 3,
+        contrast: 35,
+        saturation: 25,
+        clarity: 40,
+        denoise: 30,
+        sharpen: 60,
         levels: 1
       };
       syncControls();
@@ -412,6 +604,13 @@
       setBusy(false);
     }, 30);
   }
+
+  // ---------- 预设 ----------
+  var PRESETS = {
+    bw:    { temperature: 0,   brightness: 0,  contrast: 20, saturation: -100, clarity: 35, denoise: 25, sharpen: 50, levels: 1 },
+    vivid: { temperature: 0,   brightness: 0,  contrast: 25, saturation: 45,  clarity: 45, denoise: 15, sharpen: 45, levels: 1 },
+    retro: { temperature: -50, brightness: -5, contrast: 15, saturation: -15, clarity: 20, denoise: 20, sharpen: 35, levels: 0 }
+  };
 
   // ---------- 事件绑定 ----------
   dropzone.addEventListener("click", function () { fileInput.click(); });
@@ -437,12 +636,23 @@
     }
   });
 
+  $("demoBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    generateDemo();
+  });
+
   KEYS.forEach(function (k) {
     ctl[k].addEventListener("input", function () {
       state.params[k] = Number(ctl[k].value);
       ctl[k + "Val"].textContent = ctl[k].value;
       scheduleRender();
     });
+  });
+
+  intensityCtl.addEventListener("input", function () {
+    state.intensity = Number(intensityCtl.value);
+    intensityVal.textContent = state.intensity + "%";
+    scheduleRender();
   });
 
   levelsCtl.addEventListener("change", function () {
@@ -457,6 +667,10 @@
   });
   $("changeBtn").addEventListener("click", showUpload);
 
+  $("presetBwBtn").addEventListener("click", function () { setParams(PRESETS.bw); render(); });
+  $("presetVividBtn").addEventListener("click", function () { setParams(PRESETS.vivid); render(); });
+  $("presetRetroBtn").addEventListener("click", function () { setParams(PRESETS.retro); render(); });
+
   // 前后对比开关
   compareBtn.addEventListener("click", function () {
     state.compareMode = !state.compareMode;
@@ -466,12 +680,10 @@
   });
 
   // 按住看原图
-  ["pointerdown"].forEach(function (ev) {
-    holdBtn.addEventListener(ev, function (e) {
-      e.preventDefault();
-      state.showOriginal = true;
-      paint();
-    });
+  holdBtn.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    state.showOriginal = true;
+    paint();
   });
   ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) {
     holdBtn.addEventListener(ev, function () {

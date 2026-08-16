@@ -19,9 +19,11 @@
     medianCache: null,
     blur3Cache: null,
     blur5Cache: null,
+    dx2: null,
+    dy2: null,
     intensity: 100,
     params: {
-      wb: 1, levels: 1, temperature: 0, brightness: 0,
+      wb: 1, levels: 1, vignette: 1, temperature: 0, brightness: 0,
       contrast: 0, saturation: 0, clarity: 0, denoise: 0, sharpen: 0
     },
     compareMode: false,
@@ -47,6 +49,7 @@
   });
   var wbCtl = $("wbCtl");
   var levelsCtl = $("levelsCtl");
+  var vignetteCtl = $("vignetteCtl");
   var intensityCtl = $("intensity");
   var intensityVal = $("intensityVal");
   var compareBtn = $("compareBtn");
@@ -163,27 +166,52 @@
 
   // ---------- 管线各阶段 ----------
 
-  // 阶段A：白平衡（灰世界），线性增益；关闭时直接引用原图
+  // 阶段A：白平衡（灰世界）+ 自适应暗角补偿；均为线性增益，关闭时直接引用原图
   function computeStageA() {
     var src = state.original, w = state.width, h = state.height, n = w * h, d = src.data;
-    if (!state.params.wb) { state.stageA = src; return; }
-    var sr = 0, sg = 0, sb = 0;
-    for (var i = 0; i < n; i++) {
-      var j = i * 4;
-      sr += d[j]; sg += d[j + 1]; sb += d[j + 2];
+    var wb = state.params.wb === 1, vig = state.params.vignette === 1;
+    if (!wb && !vig) { state.stageA = src; return; }
+
+    var gR = 1, gG = 1, gB = 1;
+    if (wb) {
+      var sr = 0, sg = 0, sb = 0;
+      for (var i = 0; i < n; i++) {
+        var j = i * 4;
+        sr += d[j]; sg += d[j + 1]; sb += d[j + 2];
+      }
+      var mr = sr / n, mg = sg / n, mb = sb / n, mavg = (mr + mg + mb) / 3;
+      gR = clamp(mavg / (mr || 1), 0.7, 1.6);
+      gG = clamp(mavg / (mg || 1), 0.7, 1.6);
+      gB = clamp(mavg / (mb || 1), 0.7, 1.6);
     }
-    var mr = sr / n, mg = sg / n, mb = sb / n, mavg = (mr + mg + mb) / 3;
-    var gR = clamp(mavg / (mr || 1), 0.7, 1.6);
-    var gG = clamp(mavg / (mg || 1), 0.7, 1.6);
-    var gB = clamp(mavg / (mb || 1), 0.7, 1.6);
+
+    // 自适应暗角因子：边缘(外圈)平均亮度 / 中心(内圈)平均亮度
+    var vf = 1;
+    if (vig) {
+      var csum = 0, ccnt = 0, esum = 0, ecnt = 0;
+      for (var i2 = 0; i2 < n; i2++) {
+        var x = i2 % w, y = (i2 / w) | 0;
+        var l = 0.299 * d[i2 * 4] + 0.587 * d[i2 * 4 + 1] + 0.114 * d[i2 * 4 + 2];
+        var dd = state.dx2[x] + state.dy2[y];
+        if (dd < 0.2) { csum += l; ccnt++; }
+        else if (dd > 0.7) { esum += l; ecnt++; }
+      }
+      if (ccnt && ecnt && esum > 1) vf = Math.min(1.9, Math.max(1, (csum / ccnt) / (esum / ecnt)));
+    }
+
     var out = ctx.createImageData(w, h);
     var o = out.data;
-    for (var i2 = 0; i2 < n; i2++) {
-      var j2 = i2 * 4;
-      o[j2] = clamp(d[j2] * gR, 0, 255);
-      o[j2 + 1] = clamp(d[j2 + 1] * gG, 0, 255);
-      o[j2 + 2] = clamp(d[j2 + 2] * gB, 0, 255);
-      o[j2 + 3] = 255;
+    for (var i3 = 0; i3 < n; i3++) {
+      var x3 = i3 % w, y3 = (i3 / w) | 0, j3 = i3 * 4;
+      var r = d[j3] * gR, g = d[j3 + 1] * gG, b = d[j3 + 2] * gB;
+      if (vf > 1.01) {
+        var gain = 1 + (vf - 1) * Math.min(1, state.dx2[x3] + state.dy2[y3]);
+        r *= gain; g *= gain; b *= gain;
+      }
+      o[j3] = clamp(r, 0, 255);
+      o[j3 + 1] = clamp(g, 0, 255);
+      o[j3 + 2] = clamp(b, 0, 255);
+      o[j3 + 3] = 255;
     }
     state.stageA = out;
   }
@@ -331,6 +359,7 @@
     });
     wbCtl.checked = state.params.wb === 1;
     levelsCtl.checked = state.params.levels === 1;
+    vignetteCtl.checked = state.params.vignette === 1;
     intensityCtl.value = state.intensity;
     intensityVal.textContent = state.intensity + "%";
   }
@@ -339,6 +368,7 @@
     SLIDERS.forEach(function (k) { state.params[k] = 0; });
     state.params.wb = 0;
     state.params.levels = 0;
+    state.params.vignette = 0;
     syncControls();
   }
 
@@ -346,6 +376,7 @@
     SLIDERS.forEach(function (k) { state.params[k] = obj[k] !== undefined ? obj[k] : 0; });
     state.params.wb = obj.wb !== undefined ? obj.wb : 0;
     state.params.levels = obj.levels !== undefined ? obj.levels : 0;
+    state.params.vignette = obj.vignette !== undefined ? obj.vignette : 0;
     syncControls();
     refreshBases();
   }
@@ -366,6 +397,11 @@
 
     state.width = w;
     state.height = h;
+    var _dx2 = new Float32Array(w), _dy2 = new Float32Array(h);
+    for (var _i = 0; _i < w; _i++) _dx2[_i] = Math.pow(_i / w * 2 - 1, 2);
+    for (var _j = 0; _j < h; _j++) _dy2[_j] = Math.pow(_j / h * 2 - 1, 2);
+    state.dx2 = _dx2;
+    state.dy2 = _dy2;
     state.cur = ctx.createImageData(w, h);
     state.medianCache = null;
     state.blur3Cache = null;
@@ -522,7 +558,7 @@
     setBusy(true);
     setTimeout(function () {
       state.params = {
-        wb: 1, levels: 1, temperature: 0, brightness: 2,
+        wb: 1, levels: 1, vignette: 1, temperature: 0, brightness: 2,
         contrast: 20, saturation: 15, clarity: 30, denoise: 25, sharpen: 45
       };
       syncControls();
@@ -533,9 +569,9 @@
 
   // ---------- 预设 ----------
   var PRESETS = {
-    bw:    { wb: 1, levels: 1, temperature: 0,   brightness: 0, contrast: 20, saturation: -100, clarity: 35, denoise: 25, sharpen: 50 },
-    vivid: { wb: 1, levels: 1, temperature: 0,   brightness: 0, contrast: 25, saturation: 45,  clarity: 45, denoise: 15, sharpen: 45 },
-    retro: { wb: 0, levels: 0, temperature: -50, brightness: -5, contrast: 15, saturation: -15, clarity: 20, denoise: 20, sharpen: 35 }
+    bw:    { wb: 1, levels: 1, vignette: 1, temperature: 0,   brightness: 0, contrast: 20, saturation: -100, clarity: 35, denoise: 25, sharpen: 50 },
+    vivid: { wb: 1, levels: 1, vignette: 1, temperature: 0,   brightness: 0, contrast: 25, saturation: 45,  clarity: 45, denoise: 15, sharpen: 45 },
+    retro: { wb: 0, levels: 0, vignette: 0, temperature: -50, brightness: -5, contrast: 15, saturation: -15, clarity: 20, denoise: 20, sharpen: 35 }
   };
 
   // ---------- 事件绑定 ----------
@@ -589,6 +625,10 @@
     state.params.levels = levelsCtl.checked ? 1 : 0;
     computeLUT();
     render();
+  });
+  vignetteCtl.addEventListener("change", function () {
+    state.params.vignette = vignetteCtl.checked ? 1 : 0;
+    refreshBases();
   });
 
   $("autoBtn").addEventListener("click", autoRestore);

@@ -1,4 +1,4 @@
-/* 老照片修复 —— 纯前端本地图像处理 */
+/* 老照片修复 —— 纯前端本地图像处理（含前后对比） */
 (function () {
   "use strict";
 
@@ -8,17 +8,25 @@
     loaded: false,
     width: 0,
     height: 0,
-    original: null,   // 原始 ImageData
-    medianCache: null,// 去噪缓存（3x3 中值）
-    blurCache: null,  // 锐化缓存（3x3 高斯模糊）
+    original: null,     // 原始 ImageData
+    origCanvas: null,   // 离屏画布：原图
+    resultCanvas: null, // 离屏画布：处理结果
+    medianCache: null,  // 去噪缓存（3x3 中值）
+    blurCache: null,    // 锐化缓存（3x3 高斯模糊）
+    levelsLUT: null,    // 自动色阶 LUT（3 x 256）
     params: {
       temperature: 0,
       brightness: 0,
       contrast: 0,
       saturation: 0,
       denoise: 0,
-      sharpen: 0
-    }
+      sharpen: 0,
+      levels: 0
+    },
+    compareMode: false,
+    showOriginal: false,
+    divX: 0.5,          // 对比分隔线位置（0..1）
+    dragging: false
   };
 
   // ---------- DOM ----------
@@ -36,13 +44,14 @@
     ctl[k] = $(k);
     ctl[k + "Val"] = $(k + "Val");
   });
+  var levelsCtl = $("levelsCtl");
+  var compareBtn = $("compareBtn");
+  var holdBtn = $("holdBtn");
 
-  function setBusy(on) {
-    busyEl.classList.toggle("hidden", !on);
-  }
-
-  // ---------- 工具函数 ----------
+  function setBusy(on) { busyEl.classList.toggle("hidden", !on); }
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  // ---------- 图像算子 ----------
 
   // 3x3 中值滤波（逐通道插入排序，速度优先）
   function medianFilter(img) {
@@ -64,7 +73,6 @@
             n++;
           }
         }
-        // 插入排序求中值
         for (var a = 1; a < n; a++) {
           var tv = rv[a], p = a - 1;
           while (p >= 0 && rv[p] > tv) { rv[p + 1] = rv[p]; p--; }
@@ -116,22 +124,47 @@
     return new ImageData(out, w, h);
   }
 
+  // 直方图百分位拉伸，生成每通道 LUT（0.5% ~ 99.5%）
+  function computeLevelsLUT(img) {
+    var w = img.width, h = img.height, data = img.data, n = w * h;
+    var hist = [new Float64Array(256), new Float64Array(256), new Float64Array(256)];
+    for (var i = 0; i < n; i++) {
+      var j = i * 4;
+      hist[0][data[j]]++;
+      hist[1][data[j + 1]]++;
+      hist[2][data[j + 2]]++;
+    }
+    var luts = [new Uint8ClampedArray(256), new Uint8ClampedArray(256), new Uint8ClampedArray(256)];
+    var loCut = n * 0.005, hiCut = n * 0.995;
+    for (var c = 0; c < 3; c++) {
+      var acc = 0, lo = 0;
+      while (lo < 255 && acc + hist[c][lo] <= loCut) { acc += hist[c][lo]; lo++; }
+      acc = 0; var hi = 255;
+      while (hi > 0 && acc + hist[c][hi] <= n - hiCut) { acc += hist[c][hi]; hi--; }
+      if (hi <= lo) hi = lo + 1;
+      for (var v = 0; v < 256; v++) {
+        luts[c][v] = clamp(Math.round(((v - lo) / (hi - lo)) * 255), 0, 255);
+      }
+    }
+    return luts;
+  }
+
   function getMedian() {
     if (!state.medianCache) state.medianCache = medianFilter(state.original);
     return state.medianCache;
   }
-
   function getBlur() {
     if (!state.blurCache) state.blurCache = gaussianBlur(state.original);
     return state.blurCache;
   }
 
-  // ---------- 主渲染管线 ----------
+  // ---------- 渲染：结果画到离屏，再统一呈现 ----------
   function render() {
     if (!state.loaded) return;
     var w = state.width, h = state.height;
+    var rctx = state.resultCanvas.getContext("2d");
     var src = state.original.data;
-    var out = ctx.createImageData(w, h);
+    var out = rctx.createImageData(w, h);
     var d = out.data;
 
     var p = state.params;
@@ -139,24 +172,25 @@
     var bri = (p.brightness / 100) * 127;
     var cf = (100 + p.contrast) / 100;    // 0..2
     var sat = 1 + p.saturation / 100;     // 0..2
-
     var hasMedian = p.denoise > 0;
     var median = hasMedian ? getMedian() : null;
     var denA = p.denoise / 100;
-
     var hasBlur = p.sharpen > 0;
     var blur = hasBlur ? getBlur() : null;
     var shA = (p.sharpen / 100) * 1.6;
+    var LUT = p.levels ? state.levelsLUT : null;
 
     var n = w * h;
     for (var i = 0; i < n; i++) {
       var j = i * 4;
       var r = src[j], g = src[j + 1], b = src[j + 2];
 
+      // 0) 自动色阶（直方图拉伸）
+      if (LUT) { r = LUT[0][r]; g = LUT[1][g]; b = LUT[2][b]; }
       // 1) 去黄/色温
       if (t !== 0) {
-        r += -t * 25;
-        b += t * 25;
+        r += -t * 60;
+        b += t * 60;
       }
       // 2) 亮度
       if (bri !== 0) { r += bri; g += bri; b += bri; }
@@ -173,7 +207,7 @@
         g = lum + (g - lum) * sat;
         b = lum + (b - lum) * sat;
       }
-      // 5) 去噪（与原图按强度混合）
+      // 5) 去噪
       if (hasMedian) {
         r = r + (median.data[j] - r) * denA;
         g = g + (median.data[j + 1] - g) * denA;
@@ -192,7 +226,73 @@
       d[j + 3] = 255;
     }
 
-    ctx.putImageData(out, 0, 0);
+    rctx.putImageData(out, 0, 0);
+    paint();
+  }
+
+  // 呈现：原图 / 结果 / 前后对比分屏
+  function paint() {
+    if (!state.loaded) return;
+    var w = state.width, h = state.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (state.showOriginal) {
+      ctx.drawImage(state.origCanvas, 0, 0);
+      return;
+    }
+
+    if (state.compareMode) {
+      ctx.drawImage(state.origCanvas, 0, 0);
+      var dx = Math.round(state.divX * w);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(dx, 0, w - dx, h);
+      ctx.clip();
+      ctx.drawImage(state.resultCanvas, 0, 0);
+      ctx.restore();
+
+      // 分隔线 + 把手
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(dx, 0);
+      ctx.lineTo(dx, h);
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#6c5ce7";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(dx, h / 2, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 标签
+      ctx.font = "bold 13px -apple-system, 'PingFang SC', sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(30,36,48,0.65)";
+      roundRect(ctx, 8, 8, 52, 24, 6);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("原图", 16, 20);
+      ctx.fillStyle = "rgba(30,36,48,0.65)";
+      var tw = ctx.measureText("修复后").width;
+      roundRect(ctx, w - tw - 24, 8, tw + 16, 24, 6);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("修复后", w - tw - 16, 20);
+    } else {
+      ctx.drawImage(state.resultCanvas, 0, 0);
+    }
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
   }
 
   var rafId = 0;
@@ -210,10 +310,12 @@
       ctl[k].value = state.params[k];
       ctl[k + "Val"].textContent = state.params[k];
     });
+    levelsCtl.checked = state.params.levels === 1;
   }
 
   function resetParams() {
     KEYS.forEach(function (k) { state.params[k] = 0; });
+    state.params.levels = 0;
     syncControls();
   }
 
@@ -230,20 +332,37 @@
       var scale = Math.min(1, MAX_DIM / Math.max(w, h));
       w = Math.round(w * scale);
       h = Math.round(h * scale);
+
+      state.origCanvas = document.createElement("canvas");
+      state.origCanvas.width = w;
+      state.origCanvas.height = h;
+      var octx = state.origCanvas.getContext("2d");
+      octx.drawImage(img, 0, 0, w, h);
+      state.original = octx.getImageData(0, 0, w, h);
+
+      state.resultCanvas = document.createElement("canvas");
+      state.resultCanvas.width = w;
+      state.resultCanvas.height = h;
+
       canvas.width = w;
       canvas.height = h;
-      ctx.drawImage(img, 0, 0, w, h);
-      state.original = ctx.getImageData(0, 0, w, h);
+
       state.width = w;
       state.height = h;
       state.medianCache = null;
       state.blurCache = null;
+      state.levelsLUT = computeLevelsLUT(state.original);
+      state.compareMode = false;
+      state.showOriginal = false;
+      state.divX = 0.5;
       state.loaded = true;
       URL.revokeObjectURL(url);
 
       resetParams();
-      dropzone.classList.add("hidden");
       workspace.classList.remove("hidden");
+      dropzone.classList.add("hidden");
+      compareBtn.classList.remove("active");
+      workspace.classList.remove("comparing");
       render();
     };
     img.onerror = function () {
@@ -276,16 +395,17 @@
         sr += src[j]; sg += src[j + 1]; sb += src[j + 2];
       }
       var mr = sr / n, mg = sg / n, mb = sb / n;
-      // 黄旧照片：红绿高、蓝低 → 提高蓝、降低红（t>0 = 去黄）
-      var t = clamp(Math.round((mg - mb) / 2.5), -100, 100);
+      // 旧照片偏黄：红绿高、蓝低 → 降红升蓝（t>0 = 去黄）
+      var t = clamp(Math.round((mg - mb) / 1.5), -60, 60);
 
       state.params = {
         temperature: t,
         brightness: 0,
-        contrast: 18,
-        saturation: 14,
-        denoise: 22,
-        sharpen: 35
+        contrast: 25,
+        saturation: 18,
+        denoise: 35,
+        sharpen: 50,
+        levels: 1
       };
       syncControls();
       render();
@@ -325,6 +445,11 @@
     });
   });
 
+  levelsCtl.addEventListener("change", function () {
+    state.params.levels = levelsCtl.checked ? 1 : 0;
+    render();
+  });
+
   $("autoBtn").addEventListener("click", autoRestore);
   $("resetBtn").addEventListener("click", function () {
     resetParams();
@@ -332,17 +457,48 @@
   });
   $("changeBtn").addEventListener("click", showUpload);
 
-  var compareBtn = $("compareBtn");
-  ["pointerdown", "touchstart"].forEach(function (ev) {
-    compareBtn.addEventListener(ev, function (e) {
+  // 前后对比开关
+  compareBtn.addEventListener("click", function () {
+    state.compareMode = !state.compareMode;
+    compareBtn.classList.toggle("active", state.compareMode);
+    workspace.classList.toggle("comparing", state.compareMode);
+    paint();
+  });
+
+  // 按住看原图
+  ["pointerdown"].forEach(function (ev) {
+    holdBtn.addEventListener(ev, function (e) {
       e.preventDefault();
-      if (state.loaded) ctx.putImageData(state.original, 0, 0);
+      state.showOriginal = true;
+      paint();
     });
   });
-  ["pointerup", "pointerleave", "pointercancel", "touchend"].forEach(function (ev) {
-    compareBtn.addEventListener(ev, function () {
-      if (state.loaded) render();
+  ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) {
+    holdBtn.addEventListener(ev, function () {
+      state.showOriginal = false;
+      paint();
     });
+  });
+
+  // 对比分隔线拖动
+  function canvasPosX(e) {
+    var rect = canvas.getBoundingClientRect();
+    return clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  }
+  canvas.addEventListener("pointerdown", function (e) {
+    if (!state.loaded || !state.compareMode) return;
+    state.dragging = true;
+    state.divX = canvasPosX(e);
+    canvas.setPointerCapture(e.pointerId);
+    paint();
+  });
+  canvas.addEventListener("pointermove", function (e) {
+    if (!state.dragging) return;
+    state.divX = canvasPosX(e);
+    paint();
+  });
+  ["pointerup", "pointercancel"].forEach(function (ev) {
+    canvas.addEventListener(ev, function () { state.dragging = false; });
   });
 
   $("downloadBtn").addEventListener("click", function () {
@@ -350,7 +506,7 @@
     var a = document.createElement("a");
     var ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     a.download = "restored-" + ts + ".png";
-    a.href = canvas.toDataURL("image/png");
+    a.href = state.resultCanvas.toDataURL("image/png");
     a.click();
   });
 

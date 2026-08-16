@@ -249,6 +249,34 @@ input[type="range"] {
   font-size: 12px;
 }
 
+/* ====== 前后对比 & 控件补充 ====== */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.check input {
+  width: auto;
+  accent-color: var(--main-color);
+}
+
+.btn.active {
+  background: var(--main-color);
+  border-color: var(--main-color);
+  color: #fff;
+  font-weight: bold;
+}
+
+.stage canvas {
+  touch-action: none;
+}
+
+.workspace.comparing .stage canvas {
+  cursor: ew-resize;
+}
+
 /* ====== 手机适配 ====== */
 @media (max-width: 800px) {
   .workspace {

@@ -48,6 +48,10 @@
           <button id="resetBtn" class="btn">↺ 重置</button>
         </div>
 
+        <label class="check">
+          <input type="checkbox" id="levelsCtl" /> 增强色阶（自动拉伸明暗范围）
+        </label>
+
         <div class="control">
           <label>去黄 / 色温 <span id="temperatureVal" class="val">0</span></label>
           <input type="range" id="temperature" min="-100" max="100" value="0" />
@@ -74,12 +78,13 @@
         </div>
 
         <div class="btn-row">
-          <button id="changeBtn" class="btn ghost">🖼 换一张照片</button>
-          <button id="compareBtn" class="btn ghost">👁 按住看原图</button>
+          <button id="compareBtn" class="btn ghost">⇄ 前后对比</button>
+          <button id="changeBtn" class="btn ghost">🖼 换一张</button>
         </div>
+        <button id="holdBtn" class="btn ghost wide">👁 按住看原图</button>
         <button id="downloadBtn" class="btn primary wide">⬇ 下载修复结果（PNG）</button>
 
-        <p class="note">提示：先点「自动修复」找感觉，再用滑杆微调；多张照片之间可以切换对比效果。</p>
+        <p class="note">提示：点「前后对比」后，可拖动画布中间的分隔线查看差异；先用「自动修复」找感觉，再滑杆微调。</p>
       </aside>
     </div>
   </main>
